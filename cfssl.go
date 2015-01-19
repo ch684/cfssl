@@ -67,6 +67,10 @@ var Config struct {
 	domain            string
 	ip                string
 	remote            string
+	short             bool
+	list              bool
+	scanFamily        string
+	scanner           string
 }
 
 // Parsed command name
@@ -94,6 +98,11 @@ func registerFlags() {
 	cfsslFlagSet.StringVar(&Config.domain, "domain", "", "remote server domain name")
 	cfsslFlagSet.StringVar(&Config.ip, "ip", "", "remote server ip")
 	cfsslFlagSet.StringVar(&Config.remote, "remote", "", "remote CFSSL server")
+	cfsslFlagSet.BoolVar(&Config.short, "short", false, "so not run long/intensive scans")
+	cfsslFlagSet.BoolVar(&Config.list, "list", false, "list all possible scans")
+	cfsslFlagSet.StringVar(&Config.scanFamily, "scanfamily", "", "regexp selecting specific scan famil(y/ies) to run")
+	cfsslFlagSet.StringVar(&Config.scanner, "scanner", "", "regexp selecting specific scanner(s) to run")
+
 }
 
 // usage is the cfssl usage heading. It will be appended with names of defined commands in cmds
@@ -146,6 +155,7 @@ func init() {
 		"genkey":   CLIGenKey,
 		"gencert":  CLIGenCert,
 		"selfsign": CLISelfSign,
+		"scan":     CLIScan,
 	}
 	// Register all command flags.
 	registerFlags()
