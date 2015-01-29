@@ -67,7 +67,7 @@ var Config struct {
 	domain            string
 	ip                string
 	remote            string
-	short             bool
+	verbose           bool
 	list              bool
 	family            string
 	scanner           string
@@ -98,10 +98,10 @@ func registerFlags() {
 	cfsslFlagSet.StringVar(&Config.domain, "domain", "", "remote server domain name")
 	cfsslFlagSet.StringVar(&Config.ip, "ip", "", "remote server ip")
 	cfsslFlagSet.StringVar(&Config.remote, "remote", "", "remote CFSSL server")
-	cfsslFlagSet.BoolVar(&Config.short, "short", false, "so not run long/intensive scans")
-	cfsslFlagSet.BoolVar(&Config.list, "list", false, "list all possible scans")
-	cfsslFlagSet.StringVar(&Config.family, "family", "", "regexp selecting specific scan famil(y/ies) to run")
-	cfsslFlagSet.StringVar(&Config.scanner, "scanner", "", "regexp selecting specific scanner(s) to run")
+	cfsslFlagSet.BoolVar(&Config.verbose, "verbose", false, "give more verbose scan output")
+	cfsslFlagSet.BoolVar(&Config.list, "list", false, "list possible scans")
+	cfsslFlagSet.StringVar(&Config.family, "family", "", "regular expression selecting specific scan families to run (defaults to all)")
+	cfsslFlagSet.StringVar(&Config.scanner, "scanner", "", "regular expression selecting specific scanners to run (defaults to all)")
 }
 
 // usage is the cfssl usage heading. It will be appended with names of defined commands in cmds
