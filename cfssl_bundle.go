@@ -26,7 +26,7 @@ Flags:
 `
 
 // flags used by 'cfssl bundle'
-var bundlerFlags = []string{"cert", "key", "ca-bundle", "int-bundle", "flavor", "metadata", "domain", "ip", "config"}
+var bundlerFlags = []string{"cert", "key", "ca-bundle", "int-bundle", "flavor", "metadata", "domain", "ip"}
 
 // bundlerMain is the main CLI of bundler functionality.
 // TODO(zi): Decide whether to drop the argument list and only use flags to specify all the inputs.
