@@ -3,6 +3,7 @@
 [![Build Status](https://travis-ci.org/cloudflare/cfssl.png?branch=master)](https://travis-ci.org/cloudflare/cfssl)
 [![Coverage Status](https://coveralls.io/repos/cloudflare/cfssl/badge.svg?branch=master)](https://coveralls.io/r/cloudflare/cfssl?branch=master)
 [![GoDoc](https://godoc.org/github.com/cloudflare/cfssl?status.png)](https://godoc.org/github.com/cloudflare/cfssl)
+
 ## CloudFlare's SSL tool
 
 CFSSL is CloudFlare's SSL swiss army knife. It is both a command line
@@ -50,6 +51,9 @@ The version command takes no arguments.
 
 ```
 cfssl sign [-ca cert] [-ca-key key] hostname csr [subject]
+```
+```
+cfssl sign -remote remote_host [-config config] [-profile profile] [-label label] HOSTNAME CSR [SUBJECT]
 ```
 
 The hostname and csr are the client's host name and certificate
@@ -152,10 +156,13 @@ the JSON file in the same format as in 'genkey'. Three PEM-encoded entities
 will appear in the output: the private key, the csr, and the self-signed
 certificate.
 
+```
+cfssl gencert -initca csrjson
+
 #### Generating a remote-issued certificate and private key.
 
 ```
-cfssl gencert -remote=remote_server hostname csrjson
+cfssl gencert -remote=remote_server [-config config] [-profile profile] [-label label] hostname csrjson
 ```
 
 This is calls genkey, but has a remote CFSSL server sign and issue
@@ -164,7 +171,7 @@ a certificate.
 #### Generating a local-issued certificate and private key.
 
 ```
-cfssl gencert -ca cert -ca-key key hostname csrjson
+cfssl gencert -ca cert -ca-key key [-config config] [-profile -profile] hostname csrjson
 ```
 
 This is generates and issues a certificate and private key from a local CA
