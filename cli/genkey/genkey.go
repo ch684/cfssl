@@ -21,7 +21,7 @@ Arguments:
 Flags:
 `
 
-var genkeyFlags = []string{"initca", "config"}
+var genkeyFlags = []string{"initca"}
 
 func genkeyMain(args []string, c cli.Config) (err error) {
 	csrFile, args, err := cli.PopFirstArgument(args)
