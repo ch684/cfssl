@@ -3,7 +3,6 @@ package signer
 import (
 	"crypto/x509"
 	"encoding/json"
-
 	"github.com/cloudflare/cfssl/config"
 	cferr "github.com/cloudflare/cfssl/errors"
 )
@@ -49,7 +48,7 @@ func (s *RemoteSigner) Sign(req SignRequest) (cert []byte, err error) {
 	}
 
 	if profile.Remote == nil {
-		return nil, cferr.Wrap(cferr.APIClientError, cferr.JSONError, err)
+		return nil, cferr.New(cferr.APIClientError, cferr.JSONError)
 	}
 
 	if profile.Provider != nil {
