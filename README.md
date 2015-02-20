@@ -1,7 +1,7 @@
-# CF-SSL
+# CFSSL
 ## CloudFlare's SSL tool
 
-CF-SSL is CloudFlare's SSL swiss army knife. It is both a command line
+CFSSL is CloudFlare's SSL swiss army knife. It is both a command line
 tool and an HTTP API server for signing, verifying, and bundling SSL
 certificates. It requires Go 1.3 to build.
 
@@ -173,7 +173,7 @@ via a JSON request.
 
 ### Starting the API Server
 
-CF-SSL comes with an HTTP-based API server; the endpoints are
+CFSSL comes with an HTTP-based API server; the endpoints are
 documented in `doc/api.txt`. The server is started with the "serve"
 command:
 
