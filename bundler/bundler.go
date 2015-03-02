@@ -4,6 +4,7 @@ package bundler
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/tls"
@@ -50,6 +51,7 @@ const (
 	ecdsaWarning             = "The bundle contains ECDSA signatures, which are problematic at certain operating systems, e.g. Windows XP SP2, Android 2.2 and Android 2.3."
 	expiringWarningStub      = "The bundle is expiring within 30 days. "
 	untrustedWarningStub     = "The bundle may not be trusted by the following platform(s):"
+	ubiquityWarning          = "The bundle trust ubiquity is not guaranteed: No platform metadata found."
 	deprecateSHA1WarningStub = "Due to SHA-1 deprecation, the bundle may not be trusted by the following platform(s):"
 )
 
@@ -177,7 +179,7 @@ func (b *Bundler) BundleFromFile(bundleFile, keyFile string, flavor BundleFlavor
 // slices containing the PEM-encoded certificate(s), private key.
 func (b *Bundler) BundleFromPEM(certsPEM, keyPEM []byte, flavor BundleFlavor) (*Bundle, error) {
 	log.Debug("bundling from PEM files")
-	var key interface{}
+	var key crypto.Signer
 	var err error
 	if len(keyPEM) != 0 {
 		key, err = helpers.ParsePrivateKeyPEM(keyPEM)
@@ -475,10 +477,10 @@ func (b *Bundler) fetchIntermediates(certs []*x509.Certificate) (err error) {
 }
 
 // Bundle takes an X509 certificate (already in the
-// Certificate structure), a private key in one of the appropriate
-// formats (i.e. *rsa.PrivateKey or *ecdsa.PrivateKey), using them to
+// Certificate structure), a private key as crypto.Signer in one of the appropriate
+// formats (i.e. *rsa.PrivateKey or *ecdsa.PrivateKey, or even a opaque key), using them to
 // build a certificate bundle.
-func (b *Bundler) Bundle(certs []*x509.Certificate, key interface{}, flavor BundleFlavor) (*Bundle, error) {
+func (b *Bundler) Bundle(certs []*x509.Certificate, key crypto.Signer, flavor BundleFlavor) (*Bundle, error) {
 	log.Infof("bundling certificate for %+v", certs[0].Subject)
 	if len(certs) == 0 {
 		return nil, nil
@@ -497,19 +499,20 @@ func (b *Bundler) Bundle(certs []*x509.Certificate, key interface{}, flavor Bund
 	if key != nil {
 		switch {
 		case cert.PublicKeyAlgorithm == x509.RSA:
-			var rsaKey *rsa.PrivateKey
-			if rsaKey, ok = key.(*rsa.PrivateKey); !ok {
+
+			var rsaPublicKey *rsa.PublicKey
+			if rsaPublicKey, ok = key.Public().(*rsa.PublicKey); !ok {
 				return nil, errors.New(errors.PrivateKeyError, errors.KeyMismatch)
 			}
-			if cert.PublicKey.(*rsa.PublicKey).N.Cmp(rsaKey.PublicKey.N) != 0 {
+			if cert.PublicKey.(*rsa.PublicKey).N.Cmp(rsaPublicKey.N) != 0 {
 				return nil, errors.New(errors.PrivateKeyError, errors.KeyMismatch)
 			}
 		case cert.PublicKeyAlgorithm == x509.ECDSA:
-			var ecdsaKey *ecdsa.PrivateKey
-			if ecdsaKey, ok = key.(*ecdsa.PrivateKey); !ok {
+			var ecdsaPublicKey *ecdsa.PublicKey
+			if ecdsaPublicKey, ok = key.Public().(*ecdsa.PublicKey); !ok {
 				return nil, errors.New(errors.PrivateKeyError, errors.KeyMismatch)
 			}
-			if cert.PublicKey.(*ecdsa.PublicKey).X.Cmp(ecdsaKey.PublicKey.X) != 0 {
+			if cert.PublicKey.(*ecdsa.PublicKey).X.Cmp(ecdsaPublicKey.X) != 0 {
 				return nil, errors.New(errors.PrivateKeyError, errors.KeyMismatch)
 			}
 		default:
@@ -573,6 +576,9 @@ func (b *Bundler) Bundle(certs []*x509.Certificate, key interface{}, flavor Bund
 	case Optimal:
 		matchingChains = optimalChains(chains)
 	case Ubiquitous:
+		if len(ubiquity.Platforms) == 0 {
+			log.Warning("No metadata, Ubiquitous falls back to Optimal.")
+		}
 		matchingChains = ubiquitousChains(chains)
 	case Force:
 		matchingChains = forceChains(certs, chains)
@@ -610,13 +616,16 @@ func (b *Bundler) Bundle(certs []*x509.Certificate, key interface{}, flavor Bund
 	}
 	// Add root store presence info
 	root := matchingChains[0][len(matchingChains[0])-1]
+	bundle.Root = root
 	log.Infof("the anchoring root is %v", root.Subject)
 	// Check if there is any platform that doesn't trust the chain.
+	// Also, an warning will be generated if ubiquity.Platforms is nil,
 	untrusted := ubiquity.UntrustedPlatforms(root)
-	if len(untrusted) > 0 {
+	untrustedMsg := untrustedPlatformsWarning(untrusted)
+	if len(untrustedMsg) > 0 {
 		log.Debug("Populate untrusted platform warning.")
 		statusCode |= errors.BundleNotUbiquitousBit
-		messages = append(messages, untrustedPlatformsWarning(untrusted))
+		messages = append(messages, untrustedMsg)
 	}
 	// Check if there is any platform that rejects the chain because of SHA1 deprecation.
 	deprecated := ubiquity.DeprecatedSHA1Platforms(matchingChains[0])
@@ -674,9 +683,14 @@ func expirationWarning(expiringIntermediates []int) (ret string) {
 
 // untrustedPlatformsWarning generates a warning message with untrusted platform names.
 func untrustedPlatformsWarning(platforms []string) string {
+	if len(ubiquity.Platforms) == 0 {
+		return ubiquityWarning
+	}
+
 	if len(platforms) == 0 {
 		return ""
 	}
+
 	msg := untrustedWarningStub
 	for i, platform := range platforms {
 		if i > 0 {

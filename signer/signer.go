@@ -5,18 +5,25 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"errors"
+	"math"
 	"math/big"
 	"net"
+	"time"
 
 	"github.com/cloudflare/cfssl/config"
 	"github.com/cloudflare/cfssl/csr"
 	cferr "github.com/cloudflare/cfssl/errors"
 )
+
+// MaxPathLen is the default path length for a new CA certificate.
+var MaxPathLen = 2
 
 // Subject contains the information that should be used to override the
 // subject information when signing a certificate.
@@ -34,14 +41,6 @@ type SignRequest struct {
 	Subject  *Subject `json:"subject,omitempty"`
 	Profile  string   `json:"profile"`
 	Label    string   `json:"label"`
-}
-
-// Root is used to define where the Signer gets its public certificate
-// and private keys for signing.
-type Root struct {
-	CertFile    string
-	KeyFile     string
-	ForceRemote bool
 }
 
 // appendIf appends to a if s is not an empty string.
@@ -78,10 +77,11 @@ type Signer interface {
 
 // DefaultSigAlgo returns an appropriate X.509 signature algorithm given
 // the CA's private key.
-func DefaultSigAlgo(priv interface{}) x509.SignatureAlgorithm {
-	switch priv := priv.(type) {
-	case *rsa.PrivateKey:
-		keySize := priv.N.BitLen()
+func DefaultSigAlgo(priv crypto.Signer) x509.SignatureAlgorithm {
+	pub := priv.Public()
+	switch pub := pub.(type) {
+	case *rsa.PublicKey:
+		keySize := pub.N.BitLen()
 		switch {
 		case keySize >= 4096:
 			return x509.SHA512WithRSA
@@ -92,8 +92,8 @@ func DefaultSigAlgo(priv interface{}) x509.SignatureAlgorithm {
 		default:
 			return x509.SHA1WithRSA
 		}
-	case *ecdsa.PrivateKey:
-		switch priv.Curve {
+	case *ecdsa.PublicKey:
+		switch pub.Curve {
 		case elliptic.P256():
 			return x509.ECDSAWithSHA256
 		case elliptic.P384():
@@ -191,42 +191,94 @@ func CheckSignature(csr *x509.CertificateRequest, algo x509.SignatureAlgorithm, 
 	return x509.ErrUnsupportedAlgorithm
 }
 
-// NewSigner generates a new certificate signer from a Root structure.
-// This is one of two standard signers: local or remote. If the root
-// structure specifies a force remote, then a remote signer is created,
-// otherwise either a remote or local signer is generated based on the
-// policy. For a local signer, the CertFile and KeyFile need to be
-// defined in Root.
-func NewSigner(root Root, policy *config.Signing) (Signer, error) {
-	if policy == nil {
-		policy = &config.Signing{
-			Profiles: map[string]*config.SigningProfile{},
-			Default:  config.DefaultConfig(),
-		}
+type subjectPublicKeyInfo struct {
+	Algorithm        pkix.AlgorithmIdentifier
+	SubjectPublicKey asn1.BitString
+}
+
+// ComputeSKI derives an SKI from the certificate's public key in a
+// standard manner. This is done by computing the SHA-1 digest of the
+// SubjectPublicKeyInfo component of the certificate.
+func ComputeSKI(template *x509.Certificate) ([]byte, error) {
+	pub := template.PublicKey
+	encodedPub, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return nil, err
 	}
 
-	if !policy.Valid() {
-		return nil, cferr.New(cferr.PolicyError, cferr.InvalidPolicy)
+	var subPKI subjectPublicKeyInfo
+	_, err = asn1.Unmarshal(encodedPub, &subPKI)
+	if err != nil {
+		return nil, err
 	}
 
-	var s Signer
-	var err error
-	if root.ForceRemote {
-		s, err = NewRemoteSigner(policy)
-	} else {
-		if policy.NeedsLocalSigner() && policy.NeedsRemoteSigner() {
-			// Currently we don't support a hybrid signer
-			return nil, cferr.New(cferr.PolicyError, cferr.InvalidPolicy)
-		}
+	pubHash := sha1.Sum(subPKI.SubjectPublicKey.Bytes)
+	return pubHash[:], nil
+}
 
-		if policy.NeedsLocalSigner() {
-			s, err = NewLocalSignerFromFile(root.CertFile, root.KeyFile, policy)
-		}
+// FillTemplate is a utility function that tries to load as much of
+// the certificate template as possible from the profiles and current
+// template. It fills in the key uses, expiration, revocation URLs,
+// serial number, and SKI.
+func FillTemplate(template *x509.Certificate, defaultProfile, profile *config.SigningProfile) error {
+	ski, err := ComputeSKI(template)
 
-		if policy.NeedsRemoteSigner() {
-			s, err = NewRemoteSigner(policy)
-		}
+	var (
+		eku             []x509.ExtKeyUsage
+		ku              x509.KeyUsage
+		expiry          time.Duration
+		crlURL, ocspURL string
+	)
+
+	// The third value returned from Usages is a list of unknown key usages.
+	// This should be used when validating the profile at load, and isn't used
+	// here.
+	ku, eku, _ = profile.Usages()
+	if profile.IssuerURL == nil {
+		profile.IssuerURL = defaultProfile.IssuerURL
 	}
 
-	return s, err
+	if ku == 0 && len(eku) == 0 {
+		return cferr.New(cferr.PolicyError, cferr.NoKeyUsages)
+	}
+
+	expiry = profile.Expiry
+	if expiry == 0 {
+		expiry = defaultProfile.Expiry
+	}
+
+	if crlURL = profile.CRL; crlURL == "" {
+		crlURL = defaultProfile.CRL
+	}
+	if ocspURL = profile.OCSP; ocspURL == "" {
+		ocspURL = defaultProfile.OCSP
+	}
+
+	now := time.Now()
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).SetInt64(math.MaxInt64))
+	if err != nil {
+		return cferr.Wrap(cferr.CertificateError, cferr.Unknown, err)
+	}
+
+	template.SerialNumber = serialNumber
+	template.NotBefore = now.Add(-5 * time.Minute).UTC()
+	template.NotAfter = now.Add(expiry).UTC()
+	template.KeyUsage = ku
+	template.ExtKeyUsage = eku
+	template.BasicConstraintsValid = true
+	template.IsCA = profile.CA
+	template.SubjectKeyId = ski
+
+	if ocspURL != "" {
+		template.OCSPServer = []string{ocspURL}
+	}
+	if crlURL != "" {
+		template.CRLDistributionPoints = []string{crlURL}
+	}
+
+	if len(profile.IssuerURL) != 0 {
+		template.IssuingCertificateURL = profile.IssuerURL
+	}
+
+	return nil
 }

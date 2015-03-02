@@ -1,9 +1,13 @@
 # CFSSL
+
+[![Build Status](https://travis-ci.org/cloudflare/cfssl.png?branch=master)](https://travis-ci.org/cloudflare/cfssl)
+[![Coverage Status](https://coveralls.io/repos/cloudflare/cfssl/badge.svg?branch=master)](https://coveralls.io/r/cloudflare/cfssl?branch=master)
+[![GoDoc](https://godoc.org/github.com/cloudflare/cfssl?status.png)](https://godoc.org/github.com/cloudflare/cfssl)
 ## CloudFlare's SSL tool
 
 CFSSL is CloudFlare's SSL swiss army knife. It is both a command line
 tool and an HTTP API server for signing, verifying, and bundling SSL
-certificates. It requires Go 1.3 to build.
+certificates. It requires Go 1.4 to build.
 
 ### Installation
 
@@ -11,7 +15,7 @@ Installation requires a [working Go
 installation](http://golang.org/doc/install) and a properly set `GOPATH`.
 
 ```
-$ go get github.com/cloudflare/cfssl
+$ go get -u github.com/cloudflare/cfssl/cmd/cfssl
 ```
 
 will download and build the CFSSL tool, installing it in
@@ -19,7 +23,7 @@ will download and build the CFSSL tool, installing it in
 this repo:
 
 ```
-$ go get github.com/cloudflare/cfssl/...
+$ go get -u github.com/cloudflare/cfssl/cmd/...
 ```
 
 This will download, build, and install `cfssl`, `cfssljson`, and
@@ -37,6 +41,7 @@ should carry out:
        gencert          generate a private key and a certificate
        serve            start the API server
        version          prints out the current version
+       selfsign         generates a self-signed certificate
 
 Use "cfssl [command] -help" to find out more about a command.
 The version command takes no arguments.
@@ -213,7 +218,7 @@ The levels are:
 verifying certificates. It can be installed with
 
 ```
-go get github.com/cloudflare/cfssl/mkbundle
+go get -u github.com/cloudflare/cfssl/cmd/mkbundle
 ```
 
 It takes a collection of certificates, checks for CRL revocation (OCSP

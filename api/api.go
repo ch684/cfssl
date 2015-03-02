@@ -48,9 +48,9 @@ func handleError(w http.ResponseWriter, err error) (code int) {
 	msg := err.Error()
 	httpCode := http.StatusInternalServerError
 
-	// If it is recognized as HttpError emitted from cf-ssl,
+	// If it is recognized as HttpError emitted from cfssl,
 	// we rewrite the status code accordingly. If it is a
-	// cf-ssl error, set the http status to StatusBadRequest
+	// cfssl error, set the http status to StatusBadRequest
 	switch err := err.(type) {
 	case *errors.HTTPError:
 		httpCode = err.StatusCode

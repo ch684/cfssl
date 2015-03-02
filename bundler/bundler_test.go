@@ -14,6 +14,7 @@ import (
 	"github.com/cloudflare/cfssl/errors"
 	"github.com/cloudflare/cfssl/helpers"
 	"github.com/cloudflare/cfssl/signer"
+	"github.com/cloudflare/cfssl/signer/local"
 	"github.com/cloudflare/cfssl/ubiquity"
 )
 
@@ -41,9 +42,34 @@ func TestNewBundler(t *testing.T) {
 	newBundler(t)
 }
 
+func TestNewBundlerMissingCA(t *testing.T) {
+	badFile := "testdata/no_such_file.pem"
+	_, err := NewBundler(badFile, testIntCaBundle)
+	if err == nil {
+		t.Fatal("Should fail with error code 4001")
+	}
+
+	// generate a function checking error content
+	errorCheck := ExpectErrorMessage(`"code":4001`)
+	errorCheck(t, err)
+}
+
+func TestNewBundlerMissingIntermediate(t *testing.T) {
+	badFile := "testdata/no_such_file.pem"
+	_, err := NewBundler(testCaBundle, badFile)
+	if err == nil {
+		t.Fatal("Should fail with error code 3001")
+	}
+
+	// generate a function checking error content
+	errorCheck := ExpectErrorMessage(`"code":3001`)
+	errorCheck(t, err)
+}
+
 // JSON object of a bundle
 type bundleObject struct {
 	Bundle      string   `json:"bundle"`
+	Root        string   `json:"root"`
 	Cert        string   `json:"crt"`
 	Key         string   `json:"key"`
 	KeyType     string   `json:"key_type"`
@@ -66,7 +92,7 @@ var godaddySubjectString = `/Country=US/Province=Arizona/Locality=Scottsdale/Org
 // Also serves as a JSON format regression test.
 func TestBundleMarshalJSON(t *testing.T) {
 	b := newBundler(t)
-	bundle, _ := b.BundleFromPEM(validRootCert, nil, Optimal)
+	bundle, _ := b.BundleFromPEM(GoDaddyIntermediateCert, nil, Optimal)
 	bytes, err := json.Marshal(bundle)
 
 	if err != nil {
@@ -82,7 +108,7 @@ func TestBundleMarshalJSON(t *testing.T) {
 	if obj.Bundle == "" {
 		t.Fatal("bundle is empty.")
 	}
-	if obj.Bundle != string(validRootCert) {
+	if obj.Bundle != string(GoDaddyIntermediateCert) {
 		t.Fatal("bundle is incorrect:", obj.Bundle)
 	}
 
@@ -90,7 +116,11 @@ func TestBundleMarshalJSON(t *testing.T) {
 		t.Fatal("key is not empty:", obj.Key)
 	}
 
-	if obj.Cert != string(validRootCert) {
+	if obj.Root != string(GoDaddyRootCert) {
+		t.Fatal("Root is not recovered")
+	}
+
+	if obj.Cert != string(GoDaddyIntermediateCert) {
 		t.Fatal("Cert is not recovered")
 	}
 
@@ -135,7 +165,7 @@ func TestBundleMarshalJSON(t *testing.T) {
 	}
 }
 
-func TestBundleNonKeylessMarshalJSON(t *testing.T) {
+func TestBundleWithECDSAKeyMarshalJSON(t *testing.T) {
 	b := newCustomizedBundlerFromFile(t, testCFSSLRootBundle, testCFSSLIntBundle, "")
 	bundle, _ := b.BundleFromFile(leafECDSA256, leafKeyECDSA256, Optimal)
 	jsonBytes, err := json.Marshal(bundle)
@@ -171,6 +201,44 @@ func TestBundleNonKeylessMarshalJSON(t *testing.T) {
 
 }
 
+func TestBundleWithRSAKeyMarshalJSON(t *testing.T) {
+	b := newCustomizedBundlerFromFile(t, testCFSSLRootBundle, testCFSSLIntBundle, "")
+	bundle, _ := b.BundleFromFile(leafRSA2048, leafKeyRSA2048, Optimal)
+	jsonBytes, err := json.Marshal(bundle)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var obj map[string]interface{}
+	err = json.Unmarshal(jsonBytes, &obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key := obj["key"].(string)
+	keyBytes, _ := ioutil.ReadFile(leafKeyRSA2048)
+	keyBytes = bytes.Trim(keyBytes, " \n")
+	if key != string(keyBytes) {
+		t.Error("key is", key)
+		t.Error("keyBytes is", string(keyBytes))
+		t.Fatal("key is not recovered.")
+	}
+
+	cert := obj["crt"].(string)
+	certBytes, _ := ioutil.ReadFile(leafRSA2048)
+	certBytes = bytes.Trim(certBytes, " \n")
+	if cert != string(certBytes) {
+		t.Fatal("cert is not recovered.")
+	}
+
+	keyType := obj["key_type"]
+	if keyType != "2048-bit RSA" {
+		t.Fatal("Incorrect key type:", keyType)
+	}
+
+}
+
 // Test marshal to JSON on hostnames
 func TestBundleHostnamesMarshalJSON(t *testing.T) {
 	b := newBundler(t)
@@ -182,7 +250,7 @@ func TestBundleHostnamesMarshalJSON(t *testing.T) {
 		t.Fatal("Hostnames construction failed for cloudflare.com.", string(hostnames))
 	}
 
-	bundle, _ = b.BundleFromPEM(validRootCert, nil, Optimal)
+	bundle, _ = b.BundleFromPEM(GoDaddyIntermediateCert, nil, Optimal)
 	expected := []byte(`["Go Daddy Secure Certification Authority"]`)
 	hostnames, _ = json.Marshal(bundle.Hostnames)
 	if !bytes.Equal(hostnames, expected) {
@@ -307,10 +375,32 @@ func TestUbiquitousBundle(t *testing.T) {
 	checkUbiquityWarningAndCode(t, ubiquitousBundle, false)
 }
 
+func TestUbiquityBundleWithoutMetadata(t *testing.T) {
+	b := newCustomizedBundlerFromFile(t, testCFSSLRootBundle, testCFSSLIntBundle, "")
+	L1Cert := readCert(interL1)
+	b.RootPool.AddCert(L1Cert)
+
+	// Without platform info, ubiquitous bundling falls back to optimal bundling.
+	ubiquity.Platforms = nil
+	nuBundle, err := b.BundleFromFile(leafECDSA256, "", Ubiquitous)
+	if err != nil {
+		t.Fatal("Ubiquitous-fall-back-to-optimal bundle failed: ", err)
+
+	}
+	if len(nuBundle.Chain) != 2 {
+		t.Fatal("Ubiquitous-fall-back-to-optimal bundle failed")
+	}
+	// Should be trusted by all (i.e. zero) platforms.
+	if len(nuBundle.Status.Untrusted) != 0 {
+		t.Fatal("Ubiquitous-fall-back-to-optimal bundle status has incorrect untrusted platforms", len(nuBundle.Status.Untrusted))
+	}
+	checkUbiquityWarningAndCode(t, nuBundle, true)
+}
+
 func checkUbiquityWarningAndCode(t *testing.T, bundle *Bundle, expected bool) {
 	found := false
 	for _, msg := range bundle.Status.Messages {
-		if strings.Contains(msg, untrustedWarningStub) {
+		if strings.Contains(msg, untrustedWarningStub) || strings.Contains(msg, ubiquityWarning) {
 			found = true
 		}
 	}
@@ -403,7 +493,8 @@ func TestForceBundle(t *testing.T) {
 
 }
 
-func TestUpdateIntermediate(t *testing.T) {
+// TODO(nick): re-enable with non-expired certificate
+func testUpdateIntermediate(t *testing.T) {
 	b := newCustomizedBundlerFromFile(t, testNSSRootBundle, testIntCaBundle, "")
 	ubiquity.Platforms = nil
 	ubiquity.LoadPlatforms(testMetadata)
@@ -597,7 +688,7 @@ func newBundler(t *testing.T) (b *Bundler) {
 
 // create a test intermediate cert in PEM
 func createInterCert(t *testing.T, csrFile string, policy *config.Signing, profileName string) (certPEM []byte) {
-	s, err := signer.NewSigner(signer.Root{CertFile: testCAFile, KeyFile: testCAKeyFile}, policy)
+	s, err := local.NewSignerFromFile(testCAFile, testCAKeyFile, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
