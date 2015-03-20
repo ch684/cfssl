@@ -1,4 +1,5 @@
 # CFSSL
+<<<<<<< HEAD
 
 [![Build Status](https://travis-ci.org/cloudflare/cfssl.png?branch=master)](https://travis-ci.org/cloudflare/cfssl)
 [![Coverage Status](https://coveralls.io/repos/cloudflare/cfssl/badge.svg?branch=master)](https://coveralls.io/r/cloudflare/cfssl?branch=master)
