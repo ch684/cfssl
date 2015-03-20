@@ -2,8 +2,6 @@
 	"signing": {
 		"profiles": {
 			"CA": {
-				"usages": ["cert sign"],
-				"expiry": "720h",
 				"remote": "localhost",
 				"auth_key": "garbage"
 			},

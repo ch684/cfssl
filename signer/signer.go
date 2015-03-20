@@ -15,6 +15,7 @@ import (
 	"math"
 	"math/big"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/cloudflare/cfssl/config"
@@ -30,17 +31,16 @@ var MaxPathLen = 2
 type Subject struct {
 	CN    string
 	Names []csr.Name `json:"names"`
-	Hosts []string   `json:"hosts"`
 }
 
 // SignRequest stores a signature request, which contains the hostname,
 // the CSR, optional subject information, and the signature profile.
 type SignRequest struct {
-	Hostname string   `json:"hostname"`
-	Request  string   `json:"certificate_request"`
-	Subject  *Subject `json:"subject,omitempty"`
-	Profile  string   `json:"profile"`
-	Label    string   `json:"label"`
+	Hosts   []string `json:"hosts"`
+	Request string   `json:"certificate_request"`
+	Subject *Subject `json:"subject,omitempty"`
+	Profile string   `json:"profile"`
+	Label   string   `json:"label"`
 }
 
 // appendIf appends to a if s is not an empty string.
@@ -63,6 +63,12 @@ func (s *Subject) Name() pkix.Name {
 		appendIf(n.OU, &name.OrganizationalUnit)
 	}
 	return name
+}
+
+// SplitHosts takes a comma-spearated list of hosts and returns a slice
+// with the hosts split
+func SplitHosts(hostList string) []string {
+	return strings.Split(hostList, ",")
 }
 
 // A Signer contains a CA's certificate and private key for signing
@@ -111,8 +117,8 @@ func DefaultSigAlgo(priv crypto.Signer) x509.SignatureAlgorithm {
 // ParseCertificateRequest takes an incoming certificate request and
 // builds a certificate template from it. If not nil, the subject
 // information from subject will be used in place of the information in
-// the CSR.
-func ParseCertificateRequest(s Signer, csrBytes []byte, req *Subject) (template *x509.Certificate, err error) {
+// the CSR. The same is true for the list of hosts.
+func ParseCertificateRequest(s Signer, csrBytes []byte, sub *Subject, hosts []string) (template *x509.Certificate, err error) {
 	csr, err := x509.ParseCertificateRequest(csrBytes)
 	if err != nil {
 		err = cferr.Wrap(cferr.CertificateError, cferr.ParseFailed, err)
@@ -132,14 +138,15 @@ func ParseCertificateRequest(s Signer, csrBytes []byte, req *Subject) (template 
 		SignatureAlgorithm: s.SigAlgo(),
 	}
 
-	if req != nil {
-		template.Subject = req.Name()
-		for i := range req.Hosts {
-			if ip := net.ParseIP(req.Hosts[i]); ip != nil {
-				template.IPAddresses = append(template.IPAddresses, ip)
-			} else {
-				template.DNSNames = append(template.DNSNames, req.Hosts[i])
-			}
+	if sub != nil {
+		template.Subject = sub.Name()
+	}
+
+	for i := range hosts {
+		if ip := net.ParseIP(hosts[i]); ip != nil {
+			template.IPAddresses = append(template.IPAddresses, ip)
+		} else {
+			template.DNSNames = append(template.DNSNames, hosts[i])
 		}
 	}
 
@@ -226,7 +233,10 @@ func FillTemplate(template *x509.Certificate, defaultProfile, profile *config.Si
 	var (
 		eku             []x509.ExtKeyUsage
 		ku              x509.KeyUsage
+		backdate        time.Duration
 		expiry          time.Duration
+		notBefore       time.Time
+		notAfter        time.Time
 		crlURL, ocspURL string
 	)
 
@@ -242,8 +252,7 @@ func FillTemplate(template *x509.Certificate, defaultProfile, profile *config.Si
 		return cferr.New(cferr.PolicyError, cferr.NoKeyUsages)
 	}
 
-	expiry = profile.Expiry
-	if expiry == 0 {
+	if expiry = profile.Expiry; expiry == 0 {
 		expiry = defaultProfile.Expiry
 	}
 
@@ -253,16 +262,32 @@ func FillTemplate(template *x509.Certificate, defaultProfile, profile *config.Si
 	if ocspURL = profile.OCSP; ocspURL == "" {
 		ocspURL = defaultProfile.OCSP
 	}
+	if backdate = profile.Backdate; backdate == 0 {
+		backdate = -5 * time.Minute
+	} else {
+		backdate = -1 * profile.Backdate
+	}
 
-	now := time.Now()
+	if !profile.NotBefore.IsZero() {
+		notBefore = profile.NotBefore.UTC()
+	} else {
+		notBefore = time.Now().Round(time.Minute).Add(backdate).UTC()
+	}
+
+	if !profile.NotAfter.IsZero() {
+		notAfter = profile.NotAfter.UTC()
+	} else {
+		notAfter = notBefore.Add(expiry).UTC()
+	}
+
 	serialNumber, err := rand.Int(rand.Reader, new(big.Int).SetInt64(math.MaxInt64))
 	if err != nil {
 		return cferr.Wrap(cferr.CertificateError, cferr.Unknown, err)
 	}
 
 	template.SerialNumber = serialNumber
-	template.NotBefore = now.Add(-5 * time.Minute).UTC()
-	template.NotAfter = now.Add(expiry).UTC()
+	template.NotBefore = notBefore
+	template.NotAfter = notAfter
 	template.KeyUsage = ku
 	template.ExtKeyUsage = eku
 	template.BasicConstraintsValid = true
@@ -278,6 +303,17 @@ func FillTemplate(template *x509.Certificate, defaultProfile, profile *config.Si
 
 	if len(profile.IssuerURL) != 0 {
 		template.IssuingCertificateURL = profile.IssuerURL
+	}
+	if len(profile.Policies) != 0 {
+		template.PolicyIdentifiers = profile.Policies
+	}
+	if profile.OCSPNoCheck {
+		ocspNoCheckExtension := pkix.Extension{
+			Id:       asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 1, 5},
+			Critical: false,
+			Value:    []byte{0x05, 0x00},
+		}
+		template.ExtraExtensions = append(template.ExtraExtensions, ocspNoCheckExtension)
 	}
 
 	return nil
